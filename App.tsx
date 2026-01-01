@@ -385,7 +385,20 @@ const App: React.FC = () => {
     if (!videoRef.current || !currentAudioBuffer || !audioContextRef.current) return;
 
     setIsRecording(true);
-    const stream = (videoRef.current as any).captureStream();
+    // เตรียมวิดีโอให้พร้อม
+    videoRef.current.currentTime = 0;
+    videoRef.current.muted = true; // มั่นใจว่าปิดเสียงต้นฉบับ
+
+    // รอให้วิดีโอ Seek เสร็จสิ้น
+    await new Promise(resolve => {
+      const onSeeked = () => {
+        videoRef.current?.removeEventListener('seeked', onSeeked);
+        resolve(true);
+      };
+      videoRef.current?.addEventListener('seeked', onSeeked);
+    });
+
+    const stream = (videoRef.current as any).captureStream(30);
     const dest = audioContextRef.current.createMediaStreamDestination();
 
     const source = audioContextRef.current.createBufferSource();
@@ -397,7 +410,10 @@ const App: React.FC = () => {
       ...dest.stream.getAudioTracks()
     ]);
 
-    const recorder = new MediaRecorder(combinedStream);
+    const recorder = new MediaRecorder(combinedStream, {
+      mimeType: 'video/webm;codecs=vp8,opus'
+    });
+
     const chunks: Blob[] = [];
     recorder.ondataavailable = (e) => chunks.push(e.data);
     recorder.onstop = () => {
@@ -411,13 +427,13 @@ const App: React.FC = () => {
       setIsRecording(false);
     };
 
+    // เริ่มเล่นและเริ่มบันทึกพร้อมกัน
+    await videoRef.current.play();
     recorder.start();
     source.start();
-    videoRef.current.currentTime = 0;
-    videoRef.current.play();
 
     source.onended = () => {
-      recorder.stop();
+      if (recorder.state === 'recording') recorder.stop();
       if (videoRef.current) videoRef.current.pause();
     };
   };
@@ -697,8 +713,13 @@ const App: React.FC = () => {
                   muted
                   playsInline
                   controls
+                  crossOrigin="anonymous"
                   onPlay={() => playTranslation()}
-                  onPause={() => stopTranslation()}
+                  onPause={() => {
+                    if (videoRef.current && !videoRef.current.ended) {
+                      stopTranslation();
+                    }
+                  }}
                   onSeeking={() => stopTranslation()}
                 />
               </div>
