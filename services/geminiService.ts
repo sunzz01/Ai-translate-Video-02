@@ -30,12 +30,24 @@ const cleanTextForSpeech = (text: string): string => {
   return cleaned;
 };
 
-// การตั้งค่าความปลอดภัยที่อนุญาตให้แสดงออกได้อย่างอิสระ
+// การตั้งค่าความปลอดภัยที่อนุญาตให้เจ็นคำหยาบและภาษาดุเดือดได้เต็มที่
 const safetySettings = [
-  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  {
+    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+    threshold: HarmBlockThreshold.BLOCK_NONE, // อนุญาตคำที่ดูเหมือนการคุกคาม/ดุดัน
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+    threshold: HarmBlockThreshold.BLOCK_NONE, // อนุญาตคำแสลงดุๆ
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+    threshold: HarmBlockThreshold.BLOCK_NONE, // ป้องกันการเข้าใจผิดในคำกำกวม (เช่น ลึกๆ, ยัน)
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
 ];
 
 export const translateVideoContent = async (
@@ -82,10 +94,15 @@ export const translateVideoContent = async (
 
 export const generateThaiHook = async (
   currentText: string,
-  settings: VoiceSettings
+  settings: VoiceSettings,
+  duration?: number
 ): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const dialectContext = settings.mood === 'isan' ? "ภาษาอีสาน" : "ภาษาไทย";
+
+  const speedInstruction = duration
+    ? `วิดีโอมีความยาว/เป้าหมายเวลาคือ ${duration.toFixed(1)} วินาที ดังนั้นต้องสรุปและเรียบเรียงให้ประโยคมีความยาว "สัมพันธ์" กับเวลาดังกล่าว (เมื่อพูดออกมาแล้วควรมีระยะเวลาใกล้เคียง ${duration.toFixed(1)} วินาที)`
+    : "เน้นความน่าสนใจและดึงดูดใจ";
 
   const intensityInstruction = settings.intensity === 'polite'
     ? "เน้นความสุภาพ อ่อนโยน และไม่ใช้คำหยาบ"
@@ -96,11 +113,12 @@ export const generateThaiHook = async (
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `สรุปและเรียบเรียงข้อความนี้ให้เป็น "คำโปรย (Hook)" สำหรับ TikTok ใน ${dialectContext} 
+    ${speedInstruction}
     ${intensityInstruction}
     เน้นความน่าสนใจ มีพลัง (Impact) และดึงดูดใจสูงสุด 
     ให้นำเสนอดูเป็นธรรมชาติ มีจังหวะที่น่าตื่นเต้น (Edgy and Engaging) 
     ข้อความต้นฉบับ: "${currentText}"
-    คำตอบ: (เฉพาะข้อความที่เรียบเรียงแล้วเท่านั้น ไม่ต้องสั้นมากเกินไปเอาที่ได้อารมณ์)` ,
+    คำตอบ: (เฉพาะข้อความที่เรียบเรียงแล้วเท่านั้น ไม่ต้องสั้นมากเกินไปยกเว้นกรณีจำกัดเวลา)` ,
     config: {
       temperature: 0.9,
       safetySettings
@@ -112,9 +130,14 @@ export const generateThaiHook = async (
 
 export const generateIsanHook = async (
   currentText: string,
-  settings: VoiceSettings
+  settings: VoiceSettings,
+  duration?: number
 ): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+  const speedInstruction = duration
+    ? `วิดีโอมีความยาว/เป้าหมายเวลาคือ ${duration.toFixed(1)} วินาที ดังนั้นต้องสรุปและเรียบเรียงภาษาอีสานให้มีความยาว "สัมพันธ์" กับเวลาดังกล่าว (เมื่อพูดออกมาแล้วควรมีระยะเวลาใกล้เคียง ${duration.toFixed(1)} วินาที)`
+    : "เน้นความม่วนซื่นและดึงดูดใจ";
 
   const intensityInstruction = settings.intensity === 'polite'
     ? "เน้นความสุภาพ อ่อนเย็น (มีคำว่า จ้า, น้อ) และไม่ใช้คำหยาบเลย"
@@ -125,6 +148,7 @@ export const generateIsanHook = async (
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `สรุปและเรียบเรียงข้อความนี้ให้เป็น "คำโปรย (Hook)" สไตล์ภาษาอีสานที่ม่วนๆ และมีพลังสำหรับ TikTok 
+    ${speedInstruction}
     ${intensityInstruction}
     ข้อความต้นฉบับ: "${currentText}"
     คำตอบ: (เฉพาะข้อความภาษาอีสานที่เรียบเรียงแล้วเท่านั้น ไม่ต้องสั้นมากเกินไปเอาที่จ๊วดๆตามระดับความแรงที่กำหนด)` ,

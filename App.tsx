@@ -161,10 +161,10 @@ const App: React.FC = () => {
     processingAbortController.current = controller;
 
     try {
-      const hookedText = await generateThaiHook(translatedText, settings);
+      const targetDuration = settings.customDuration || videoDuration;
+      const hookedText = await generateThaiHook(translatedText, settings, targetDuration);
       if (controller.signal.aborted) return;
       setTranslatedText(hookedText);
-      await refreshVoice(hookedText, undefined, undefined, controller);
     } catch (e: any) {
       if (e.name !== 'AbortError') setErrorMessage(e.message || "ไม่สามารถสร้าง Hook ได้");
     } finally {
@@ -185,10 +185,10 @@ const App: React.FC = () => {
     processingAbortController.current = controller;
 
     try {
-      const hookedText = await generateIsanHook(translatedText, settings);
+      const targetDuration = settings.customDuration || videoDuration;
+      const hookedText = await generateIsanHook(translatedText, settings, targetDuration);
       if (controller.signal.aborted) return;
       setTranslatedText(hookedText);
-      await refreshVoice(hookedText, undefined, isanSettings, controller);
     } catch (e: any) {
       if (e.name !== 'AbortError') setErrorMessage(e.message || "ไม่สามารถสร้าง Hook อิสานได้");
     } finally {
@@ -230,7 +230,7 @@ const App: React.FC = () => {
     }
   };
 
-  const playTranslation = async () => {
+  const playTranslation = async (offset?: number) => {
     if (!audioContextRef.current || !currentAudioBuffer) return;
 
     if (audioContextRef.current.state === 'suspended') {
@@ -245,26 +245,25 @@ const App: React.FC = () => {
     source.buffer = currentAudioBuffer;
     source.connect(audioContextRef.current.destination);
 
-    if (videoRef.current) {
-      videoRef.current.currentTime = 0;
-      videoRef.current.play();
-    }
+    const startTime = offset !== undefined ? offset : (videoRef.current?.currentTime || 0);
 
-    source.onended = () => {
-      setIsPlaying(false);
-      if (videoRef.current) videoRef.current.pause();
-    };
-
-    source.start();
+    source.start(0, startTime);
     audioSourceRef.current = source;
     setIsPlaying(true);
+
+    source.onended = () => {
+      if (audioSourceRef.current === source) {
+        setIsPlaying(false);
+      }
+    };
   };
 
   const stopTranslation = () => {
     if (audioSourceRef.current) {
       try { audioSourceRef.current.stop(); } catch (e) { }
+      audioSourceRef.current = null;
     }
-    if (videoRef.current) {
+    if (videoRef.current && !videoRef.current.paused) {
       try { videoRef.current.pause(); } catch (e) { }
     }
     setIsPlaying(false);
@@ -539,7 +538,17 @@ const App: React.FC = () => {
                 วิดีโอต้นฉบับ ({videoDuration.toFixed(1)}s)
               </h4>
               <div className="aspect-video bg-black rounded-2xl overflow-hidden shadow-inner relative group border border-slate-200">
-                <video ref={videoRef} src={videoUrl || ""} className="w-full h-full object-contain" muted playsInline />
+                <video
+                  ref={videoRef}
+                  src={videoUrl || ""}
+                  className="w-full h-full object-contain"
+                  muted
+                  playsInline
+                  controls
+                  onPlay={() => playTranslation()}
+                  onPause={() => stopTranslation()}
+                  onSeeking={() => stopTranslation()}
+                />
               </div>
 
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
@@ -611,6 +620,33 @@ const App: React.FC = () => {
               )}
 
               <div className="space-y-4">
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 mb-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">กำหนดระยะเวลาเป้าหมาย (วินาที)</label>
+                    <button
+                      onClick={() => updateSettings('customDuration', null)}
+                      className={`px-3 py-1 text-[10px] font-bold rounded-lg transition-all ${settings.customDuration === null ? 'bg-indigo-600 text-white shadow-md' : 'bg-white text-slate-400 border border-slate-200 hover:border-indigo-300'}`}
+                    >
+                      NONE
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      min="1"
+                      max="300"
+                      value={settings.customDuration || ""}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value);
+                        updateSettings('customDuration', isNaN(val) ? null : val);
+                      }}
+                      placeholder="เช่น 10 (ว่างไว้ = ตามวิดีโอ)"
+                      className="flex-1 bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-700 focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 outline-none transition-all"
+                    />
+                    <div className="flex items-center text-slate-400 text-xs font-bold px-2">วินาที</div>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <button
                     onClick={applyAIHook}
@@ -645,7 +681,7 @@ const App: React.FC = () => {
                     <span className="text-[10px] font-normal opacity-60">(หลังแก้คำแปล)</span>
                   </button>
                   <button
-                    onClick={isPlaying ? stopTranslation : playTranslation}
+                    onClick={isPlaying ? stopTranslation : () => videoRef.current?.play()}
                     disabled={isRegenerating || isHooking || isIsanHooking || !currentAudioBuffer}
                     className={`${isPlaying ? 'bg-red-500' : 'bg-indigo-600'} text-white py-4 rounded-2xl font-bold hover:opacity-90 transition-all shadow-lg flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed`}
                   >

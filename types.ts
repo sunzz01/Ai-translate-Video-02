@@ -21,6 +21,7 @@ export interface VoiceSettings {
   mood: Mood;
   speed: SpeechSpeed;
   intensity: LanguageIntensity;
+  customDuration?: number | null;
 }
 
 export interface TranslationResult {
