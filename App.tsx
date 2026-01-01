@@ -19,6 +19,9 @@ const App: React.FC = () => {
   const [isIsanHooking, setIsIsanHooking] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   
+  // ย้ายมาเป็น State เพื่อให้ UI ตอบสนองได้ทันที
+  const [currentAudioBuffer, setCurrentAudioBuffer] = useState<AudioBuffer | null>(null);
+  
   const [settings, setSettings] = useState<VoiceSettings>({
     mode: 'auto',
     gender: 'female',
@@ -91,7 +94,7 @@ const App: React.FC = () => {
     setIsHooking(false);
     setIsIsanHooking(false);
     setIsRegenerating(false);
-    (window as any).currentAudioBuffer = null;
+    setCurrentAudioBuffer(null);
   };
 
   const startProcessing = async () => {
@@ -124,8 +127,7 @@ const App: React.FC = () => {
   const applyAIHook = async () => {
     if (!translatedText || isHooking) return;
     setIsHooking(true);
-    // ล้างเสียงเก่าทิ้งทันที
-    (window as any).currentAudioBuffer = null;
+    setCurrentAudioBuffer(null); // ล้างเสียงเก่า
     
     const controller = new AbortController();
     processingAbortController.current = controller;
@@ -145,8 +147,7 @@ const App: React.FC = () => {
   const applyIsanHook = async () => {
     if (!translatedText || isIsanHooking) return;
     setIsIsanHooking(true);
-    // ล้างเสียงเก่าทิ้งทันที
-    (window as any).currentAudioBuffer = null;
+    setCurrentAudioBuffer(null); // ล้างเสียงเก่า
     
     const isanSettings: VoiceSettings = { ...settings, mood: 'isan' };
     setSettings(isanSettings);
@@ -168,8 +169,7 @@ const App: React.FC = () => {
 
   const refreshVoice = async (textToUse: string, customDuration?: number, overrideSettings?: VoiceSettings, controller?: AbortController) => {
     setIsRegenerating(true);
-    // ล้างเสียงเก่าทิ้งก่อนเริ่มเจ็นใหม่
-    (window as any).currentAudioBuffer = null;
+    setCurrentAudioBuffer(null); // ล้างเสียงก่อนเจ็นใหม่เสมอ
     
     const durationToUse = customDuration !== undefined ? customDuration : videoDuration;
     const settingsToUse = overrideSettings || settings;
@@ -183,7 +183,7 @@ const App: React.FC = () => {
       }
       
       const audioBuffer = await decodePCMData(pcmData, audioContextRef.current);
-      (window as any).currentAudioBuffer = audioBuffer;
+      setCurrentAudioBuffer(audioBuffer); // เก็บเข้า State
     } catch (e) {
       console.error(e);
       if (controller?.signal.aborted) return;
@@ -194,11 +194,11 @@ const App: React.FC = () => {
   };
 
   const playTranslation = () => {
-    if (!audioContextRef.current || !(window as any).currentAudioBuffer) return;
+    if (!audioContextRef.current || !currentAudioBuffer) return;
     if (audioSourceRef.current) audioSourceRef.current.stop();
 
     const source = audioContextRef.current.createBufferSource();
-    source.buffer = (window as any).currentAudioBuffer;
+    source.buffer = currentAudioBuffer;
     source.connect(audioContextRef.current.destination);
     
     if (videoRef.current) {
@@ -223,9 +223,8 @@ const App: React.FC = () => {
   };
 
   const downloadVoice = () => {
-    const buffer = (window as any).currentAudioBuffer;
-    if (!buffer) return;
-    const wavBlob = audioBufferToWav(buffer);
+    if (!currentAudioBuffer) return;
+    const wavBlob = audioBufferToWav(currentAudioBuffer);
     const url = URL.createObjectURL(wavBlob);
     const link = document.createElement('a');
     link.href = url;
@@ -235,14 +234,14 @@ const App: React.FC = () => {
   };
 
   const downloadVideo = async () => {
-    if (!videoRef.current || !(window as any).currentAudioBuffer || !audioContextRef.current) return;
+    if (!videoRef.current || !currentAudioBuffer || !audioContextRef.current) return;
     
     setIsRecording(true);
     const stream = (videoRef.current as any).captureStream();
     const dest = audioContextRef.current.createMediaStreamDestination();
     
     const source = audioContextRef.current.createBufferSource();
-    source.buffer = (window as any).currentAudioBuffer;
+    source.buffer = currentAudioBuffer;
     source.connect(dest);
     
     const combinedStream = new MediaStream([
@@ -421,7 +420,7 @@ const App: React.FC = () => {
                   <div className="bg-white/20 p-2 rounded-lg group-hover:bg-white/30 transition-colors">
                     <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>
                   </div>
-                  <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-400 to-indigo-400 rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-1000 group-hover:duration-200"></div>
+                  <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-400 to-indigo-400 rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-1000 group-hover:opacity-40 transition duration-1000"></div>
                 </button>
               </div>
             )}
@@ -490,11 +489,11 @@ const App: React.FC = () => {
                   <svg className="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" /></svg>
                   <span className="text-[10px] font-bold uppercase">Share</span>
                 </button>
-                <button onClick={downloadVoice} className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all">
+                <button onClick={downloadVoice} disabled={!currentAudioBuffer} className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all disabled:opacity-30">
                   <svg className="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
                   <span className="text-[10px] font-bold uppercase">Voice.wav</span>
                 </button>
-                <button onClick={downloadVideo} className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all">
+                <button onClick={downloadVideo} disabled={!currentAudioBuffer} className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all disabled:opacity-30">
                   <svg className="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                   <span className="text-[10px] font-bold uppercase">Video.webm</span>
                 </button>
@@ -546,7 +545,7 @@ const App: React.FC = () => {
                   </button>
                   <button 
                     onClick={isPlaying ? stopTranslation : () => playTranslation()} 
-                    disabled={isRegenerating || isHooking || isIsanHooking || !(window as any).currentAudioBuffer}
+                    disabled={isRegenerating || isHooking || isIsanHooking || !currentAudioBuffer}
                     className={`${isPlaying ? 'bg-red-500' : 'bg-indigo-600'} text-white py-4 rounded-2xl font-bold hover:opacity-90 transition-all shadow-lg flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed`}
                   >
                     {isPlaying ? (<><svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" /></svg>หยุดเล่น</>) : (<><svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>เล่นพร้อมพากย์</>)}
