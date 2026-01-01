@@ -19,6 +19,8 @@ const App: React.FC = () => {
   const [isIsanHooking, setIsIsanHooking] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [hasApiKey, setHasApiKey] = useState<boolean>(false);
+  const [videoUrlInput, setVideoUrlInput] = useState("");
+  const [isFetchingUrl, setIsFetchingUrl] = useState(false);
 
   const [currentAudioBuffer, setCurrentAudioBuffer] = useState<AudioBuffer | null>(null);
 
@@ -111,6 +113,90 @@ const App: React.FC = () => {
       };
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleUrlFetch = async () => {
+    if (!videoUrlInput) {
+      setErrorMessage("กรุณาใส่ลิงก์วิดีโอ");
+      return;
+    }
+
+    setIsFetchingUrl(true);
+    setErrorMessage(null);
+
+    try {
+      // ใช้ Cobalt API (Public Instance) เป็นตัวช่วยดาวน์โหลด
+      // รายการ instance: https://instances.cobalt.tools/
+      const apiInstances = [
+        "https://api.cobalt.tools/api/json",
+        "https://cobalt.perreault.info/api/json",
+        "https://co.wuk.sh/api/json"
+      ];
+
+      let success = false;
+      let videoBuffer;
+      let videoMime = "video/mp4";
+
+      for (const api of apiInstances) {
+        try {
+          const response = await fetch(api, {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              url: videoUrlInput,
+              videoQuality: '720', // ลดขนาดไฟล์เพื่อความรวดเร็ว
+              downloadMode: 'video'
+            })
+          });
+
+          const data = await response.json();
+          if (data.url) {
+            const videoResp = await fetch(data.url);
+            videoBuffer = await videoResp.arrayBuffer();
+            videoMime = videoResp.headers.get('Content-Type') || "video/mp4";
+            success = true;
+            break;
+          }
+        } catch (e) {
+          console.warn(`Failed with instance ${api}, trying next...`);
+        }
+      }
+
+      if (!success || !videoBuffer) {
+        throw new Error("ไม่สามารถดาวน์โหลดวิดีโอจากลิงก์นี้ได้ กรุณาลองลิงก์อื่นหรือใช้การอัปโหลดไฟล์แทน");
+      }
+
+      // ตรวจสอบขนาดไฟล์ (Gemini จำกัดที่ 20MB ในที่นี้เราเตือนไว้ก่อน)
+      if (videoBuffer.byteLength > 20 * 1024 * 1024) {
+        throw new Error("วิดีโอจากลิงก์มีขนาดใหญ่เกินไป (จำกัด 20MB)");
+      }
+
+      const blob = new Blob([videoBuffer], { type: videoMime });
+      const b64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.readAsDataURL(blob);
+      });
+
+      setVideoBase64(b64);
+      setVideoMimeType(videoMime);
+      const objUrl = URL.createObjectURL(blob);
+      setVideoUrl(objUrl);
+      setFileName(`URL: ${new URL(videoUrlInput).hostname}`);
+
+      const tempVideo = document.createElement('video');
+      tempVideo.src = objUrl;
+      tempVideo.onloadedmetadata = () => {
+        setVideoDuration(tempVideo.duration);
+      };
+    } catch (e: any) {
+      setErrorMessage(e.message || "เกิดข้อผิดพลาดในการดึงวิดีโอ");
+    } finally {
+      setIsFetchingUrl(false);
+    }
   };
 
   const handleCancel = () => {
@@ -473,26 +559,77 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <div className={`flex flex-col items-center justify-center border-2 border-dashed rounded-2xl p-12 transition-all ${videoBase64 ? 'border-green-400 bg-green-50/20' : 'border-slate-200 hover:border-blue-400 hover:bg-blue-50/30'}`}>
-              <label className="cursor-pointer bg-blue-600 text-white px-10 py-4 rounded-full font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 mb-4 flex items-center">
-                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0l-4-4m4 4V4" /></svg>
-                {videoBase64 ? 'เปลี่ยนวิดีโอ' : 'อัปโหลดวิดีโอ'}
-                <input type="file" className="hidden" accept="video/*" onChange={handleFileUpload} />
-              </label>
-              {fileName ? (
-                <div className="text-center">
-                  <p className="text-slate-800 font-bold mb-1 flex items-center justify-center">
-                    <svg className="w-4 h-4 mr-1 text-green-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
-                    {fileName}
-                  </p>
-                  <p className="text-slate-400 text-xs italic">ความยาว: {videoDuration.toFixed(1)} วินาที</p>
+            <div className={`flex flex-col border-2 border-dashed rounded-2xl p-8 transition-all ${videoBase64 ? 'border-green-400 bg-green-50/20' : 'border-slate-200 hover:border-blue-400 hover:bg-blue-50/30'}`}>
+              <div className="w-full max-w-2xl mx-auto space-y-6">
+                {/* URL Import Section */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 mb-2">
+                  <label className="text-sm font-bold text-slate-700 block mb-3 uppercase tracking-wider flex items-center">
+                    <svg className="w-4 h-4 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                    นำเข้าวิดีโอจาก URL
+                  </label>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="relative flex-1">
+                      <input
+                        type="text"
+                        value={videoUrlInput}
+                        onChange={(e) => setVideoUrlInput(e.target.value)}
+                        placeholder="วางลิงก์ YouTube, TikTok หรือ Facebook ที่นี่..."
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 transition-all pr-24"
+                      />
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 flex gap-1 pointer-events-none opacity-40">
+                        <span className="text-xs">📺</span>
+                        <span className="text-xs">🎵</span>
+                        <span className="text-xs">👥</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleUrlFetch}
+                      disabled={isFetchingUrl || !videoUrlInput}
+                      className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold text-sm hover:bg-black transition-all disabled:opacity-50 flex items-center justify-center whitespace-nowrap group"
+                    >
+                      {isFetchingUrl ? (
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      ) : (
+                        <>
+                          <svg className="w-4 h-4 mr-2 group-hover:scale-125 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" /></svg>
+                          ดึงวิดีโอ
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-[10px] text-slate-400 font-medium">รองรับวิดีโอสั้นและปกติ (ขนาดไฟล์ไม่เกิน 20MB หลังดาวน์โหลด)</p>
                 </div>
-              ) : (
-                <p className="text-slate-400 text-sm italic">รองรับไฟล์วิดีโอทั่วไป (สูงสุด 20MB)</p>
-              )}
+
+                <div className="flex items-center gap-4 py-2">
+                  <div className="h-[1px] bg-slate-200 flex-1"></div>
+                  <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">หรือ (อัปโหลดจากเครื่อง)</span>
+                  <div className="h-[1px] bg-slate-200 flex-1"></div>
+                </div>
+
+                {/* File Upload Section */}
+                <div className="flex flex-col items-center">
+                  <label className="cursor-pointer bg-blue-600 text-white px-10 py-4 rounded-full font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 mb-4 flex items-center group">
+                    <svg className="w-5 h-5 mr-2 group-hover:bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0l-4-4m4 4V4" /></svg>
+                    {videoBase64 ? 'เปลี่ยนวิดีโอ' : 'เลือกไฟล์วิดีโอ'}
+                    <input type="file" className="hidden" accept="video/*" onChange={handleFileUpload} />
+                  </label>
+                  {fileName ? (
+                    <div className="text-center bg-green-50 px-4 py-2 rounded-xl border border-green-100">
+                      <p className="text-green-800 font-bold text-xs flex items-center justify-center">
+                        <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                        {fileName}
+                      </p>
+                      <p className="text-green-600/60 text-[10px] font-bold">ความยาว: {videoDuration.toFixed(1)} วินาที</p>
+                    </div>
+                  ) : (
+                    <p className="text-slate-400 text-[11px] font-medium italic">รองรับไฟล์วิดีโอทั่วไป (สูงสุด 20MB)</p>
+                  )}
+                </div>
+              </div>
+
               {errorMessage && (
-                <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-sm font-medium animate-pulse text-center">
-                  <p className="font-bold mb-1 uppercase tracking-tight">⚠️ เกิดข้อผิดพลาด</p>
+                <div className="mt-8 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-sm font-medium animate-pulse text-center w-full max-w-md mx-auto">
+                  <p className="font-bold mb-1 uppercase tracking-tight text-xs">⚠️ เกิดข้อผิดพลาด</p>
                   <p>{errorMessage}</p>
                 </div>
               )}
