@@ -18,8 +18,8 @@ const App: React.FC = () => {
   const [isHooking, setIsHooking] = useState(false);
   const [isIsanHooking, setIsIsanHooking] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState<boolean>(false);
   
-  // ย้ายมาเป็น State เพื่อให้ UI ตอบสนองได้ทันที
   const [currentAudioBuffer, setCurrentAudioBuffer] = useState<AudioBuffer | null>(null);
   
   const [settings, setSettings] = useState<VoiceSettings>({
@@ -33,6 +33,21 @@ const App: React.FC = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const processingAbortController = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    // ตรวจสอบสถานะ API Key เมื่อโหลด Component
+    const checkApiKey = async () => {
+      try {
+        if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
+          const hasKey = await window.aistudio.hasSelectedApiKey();
+          setHasApiKey(hasKey);
+        }
+      } catch (e) {
+        console.error("Failed to check API key status", e);
+      }
+    };
+    checkApiKey();
+  }, []);
 
   useEffect(() => {
     let interval: number;
@@ -54,6 +69,17 @@ const App: React.FC = () => {
     }
     return () => clearInterval(interval);
   }, [step]);
+
+  const handleSelectApiKey = async () => {
+    try {
+      if (window.aistudio && typeof window.aistudio.openSelectKey === 'function') {
+        await window.aistudio.openSelectKey();
+        setHasApiKey(true); // สมมติว่าสำเร็จตาม Guideline
+      }
+    } catch (e) {
+      console.error("Failed to open key selector", e);
+    }
+  };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -119,7 +145,7 @@ const App: React.FC = () => {
       setStep(ProcessingStep.COMPLETED);
     } catch (error: any) {
       if (error.name === 'AbortError' || controller.signal.aborted) return;
-      setErrorMessage(error.message || "เกิดข้อผิดพลาด");
+      setErrorMessage(error.message || "เกิดข้อผิดพลาดในการประมวลผล");
       setStep(ProcessingStep.ERROR);
     }
   };
@@ -127,7 +153,8 @@ const App: React.FC = () => {
   const applyAIHook = async () => {
     if (!translatedText || isHooking) return;
     setIsHooking(true);
-    setCurrentAudioBuffer(null); // ล้างเสียงเก่า
+    setCurrentAudioBuffer(null);
+    setErrorMessage(null);
     
     const controller = new AbortController();
     processingAbortController.current = controller;
@@ -138,7 +165,7 @@ const App: React.FC = () => {
       setTranslatedText(hookedText);
       await refreshVoice(hookedText, undefined, undefined, controller);
     } catch (e: any) {
-      if (e.name !== 'AbortError') setErrorMessage("ไม่สามารถสร้าง Hook ได้");
+      if (e.name !== 'AbortError') setErrorMessage(e.message || "ไม่สามารถสร้าง Hook ได้");
     } finally {
       setIsHooking(false);
     }
@@ -147,7 +174,8 @@ const App: React.FC = () => {
   const applyIsanHook = async () => {
     if (!translatedText || isIsanHooking) return;
     setIsIsanHooking(true);
-    setCurrentAudioBuffer(null); // ล้างเสียงเก่า
+    setCurrentAudioBuffer(null);
+    setErrorMessage(null);
     
     const isanSettings: VoiceSettings = { ...settings, mood: 'isan' };
     setSettings(isanSettings);
@@ -161,7 +189,7 @@ const App: React.FC = () => {
       setTranslatedText(hookedText);
       await refreshVoice(hookedText, undefined, isanSettings, controller);
     } catch (e: any) {
-      if (e.name !== 'AbortError') setErrorMessage("ไม่สามารถสร้าง Hook อิสานได้");
+      if (e.name !== 'AbortError') setErrorMessage(e.message || "ไม่สามารถสร้าง Hook อิสานได้");
     } finally {
       setIsIsanHooking(false);
     }
@@ -169,7 +197,8 @@ const App: React.FC = () => {
 
   const refreshVoice = async (textToUse: string, customDuration?: number, overrideSettings?: VoiceSettings, controller?: AbortController) => {
     setIsRegenerating(true);
-    setCurrentAudioBuffer(null); // ล้างเสียงก่อนเจ็นใหม่เสมอ
+    setCurrentAudioBuffer(null);
+    setErrorMessage(null);
     
     const durationToUse = customDuration !== undefined ? customDuration : videoDuration;
     const settingsToUse = overrideSettings || settings;
@@ -183,19 +212,33 @@ const App: React.FC = () => {
       }
       
       const audioBuffer = await decodePCMData(pcmData, audioContextRef.current);
-      setCurrentAudioBuffer(audioBuffer); // เก็บเข้า State
-    } catch (e) {
+      setCurrentAudioBuffer(audioBuffer);
+    } catch (e: any) {
       console.error(e);
       if (controller?.signal.aborted) return;
-      setErrorMessage("ไม่สามารถสร้างเสียงใหม่ได้");
+      
+      // กรณี Error ที่ระบุว่า Entity not found มักเกิดจาก API Key มีปัญหา
+      if (e.message?.includes("Requested entity was not found")) {
+        setHasApiKey(false);
+        setErrorMessage("API Key ที่เลือกไม่ถูกต้องหรือไม่มีสิทธิ์ใช้งาน กรุณาเลือกใหม่");
+      } else {
+        setErrorMessage(e.message || "ไม่สามารถสร้างเสียงใหม่ได้ กรุณาลองใหม่อีกครั้ง");
+      }
     } finally {
       setIsRegenerating(false);
     }
   };
 
-  const playTranslation = () => {
+  const playTranslation = async () => {
     if (!audioContextRef.current || !currentAudioBuffer) return;
-    if (audioSourceRef.current) audioSourceRef.current.stop();
+    
+    if (audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume();
+    }
+
+    if (audioSourceRef.current) {
+      try { audioSourceRef.current.stop(); } catch(e) {}
+    }
 
     const source = audioContextRef.current.createBufferSource();
     source.buffer = currentAudioBuffer;
@@ -217,8 +260,12 @@ const App: React.FC = () => {
   };
 
   const stopTranslation = () => {
-    if (audioSourceRef.current) audioSourceRef.current.stop();
-    if (videoRef.current) videoRef.current.pause();
+    if (audioSourceRef.current) {
+      try { audioSourceRef.current.stop(); } catch(e) {}
+    }
+    if (videoRef.current) {
+      try { videoRef.current.pause(); } catch(e) {}
+    }
     setIsPlaying(false);
   };
 
@@ -228,7 +275,7 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(wavBlob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'vocalbridge-thai-voice.wav';
+    link.download = `vocalbridge-voice-${Date.now()}.wav`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -257,7 +304,7 @@ const App: React.FC = () => {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = 'vocalbridge-translated-video.webm';
+      link.download = `vocalbridge-video-${Date.now()}.webm`;
       link.click();
       URL.revokeObjectURL(url);
       setIsRecording(false);
@@ -289,6 +336,18 @@ const App: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const handleStartOver = () => {
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setStep(ProcessingStep.IDLE);
+    setFileName(null);
+    setVideoBase64(null);
+    setVideoUrl(null);
+    setCurrentAudioBuffer(null);
+    setTranslatedText("");
+    setErrorMessage(null);
+    setProgress(0);
   };
 
   const audioBufferToWav = (buffer: AudioBuffer) => {
@@ -331,7 +390,29 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center py-12 px-4 bg-slate-50">
+    <div className="min-h-screen flex flex-col items-center py-12 px-4 bg-slate-50 relative">
+      {/* API Key Selector Button (Top Right) */}
+      <div className="absolute top-4 right-4 z-[60] flex flex-col items-end gap-2">
+        <button 
+          onClick={handleSelectApiKey}
+          className={`flex items-center gap-2 px-4 py-2 rounded-full font-bold text-xs transition-all shadow-md ${hasApiKey ? 'bg-white text-green-600 border border-green-100 hover:bg-green-50' : 'bg-orange-500 text-white hover:bg-orange-600'}`}
+        >
+          <div className={`w-2 h-2 rounded-full animate-pulse ${hasApiKey ? 'bg-green-500' : 'bg-white'}`}></div>
+          {hasApiKey ? 'API KEY: ACTIVE' : 'SET API KEY'}
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+        </button>
+        {!hasApiKey && (
+          <a 
+            href="https://ai.google.dev/gemini-api/docs/billing" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-[10px] text-slate-400 underline hover:text-blue-500 transition-colors"
+          >
+            Learn about API Billing
+          </a>
+        )}
+      </div>
+
       <header className="max-w-4xl w-full text-center mb-8">
         <h1 className="text-4xl font-bold text-slate-900 mb-2 bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent uppercase tracking-tight">
           VocalBridge
@@ -393,7 +474,7 @@ const App: React.FC = () => {
             <div className={`flex flex-col items-center justify-center border-2 border-dashed rounded-2xl p-12 transition-all ${videoBase64 ? 'border-green-400 bg-green-50/20' : 'border-slate-200 hover:border-blue-400 hover:bg-blue-50/30'}`}>
               <label className="cursor-pointer bg-blue-600 text-white px-10 py-4 rounded-full font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 mb-4 flex items-center">
                 <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0l-4-4m4 4V4" /></svg>
-                {videoBase64 ? 'เปลี่ยนวิดีโอ' : 'อัพโหลดวิดีโอ'}
+                {videoBase64 ? 'เปลี่ยนวิดีโอ' : 'อัปโหลดวิดีโอ'}
                 <input type="file" className="hidden" accept="video/*" onChange={handleFileUpload} />
               </label>
               {fileName ? (
@@ -407,7 +488,12 @@ const App: React.FC = () => {
               ) : (
                 <p className="text-slate-400 text-sm italic">รองรับไฟล์วิดีโอทั่วไป (สูงสุด 20MB)</p>
               )}
-              {errorMessage && <p className="mt-4 text-red-500 text-sm font-medium">{errorMessage}</p>}
+              {errorMessage && (
+                <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-sm font-medium animate-pulse text-center">
+                  <p className="font-bold mb-1 uppercase tracking-tight">⚠️ เกิดข้อผิดพลาด</p>
+                  <p>{errorMessage}</p>
+                </div>
+              )}
             </div>
 
             {videoBase64 && (
@@ -420,7 +506,6 @@ const App: React.FC = () => {
                   <div className="bg-white/20 p-2 rounded-lg group-hover:bg-white/30 transition-colors">
                     <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>
                   </div>
-                  <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-400 to-indigo-400 rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-1000 group-hover:opacity-40 transition duration-1000"></div>
                 </button>
               </div>
             )}
@@ -487,28 +572,35 @@ const App: React.FC = () => {
               <div className="grid grid-cols-3 gap-2">
                 <button onClick={shareContent} className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all">
                   <svg className="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" /></svg>
-                  <span className="text-[10px] font-bold uppercase">Share</span>
+                  <span className="text-[10px] font-bold uppercase">แชร์ผลลัพธ์</span>
                 </button>
                 <button onClick={downloadVoice} disabled={!currentAudioBuffer} className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all disabled:opacity-30">
                   <svg className="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
-                  <span className="text-[10px] font-bold uppercase">Voice.wav</span>
+                  <span className="text-[10px] font-bold uppercase">โหลดเสียง</span>
                 </button>
                 <button onClick={downloadVideo} disabled={!currentAudioBuffer} className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all disabled:opacity-30">
                   <svg className="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                  <span className="text-[10px] font-bold uppercase">Video.webm</span>
+                  <span className="text-[10px] font-bold uppercase">โหลดวิดีโอ</span>
                 </button>
               </div>
 
-              <button onClick={() => { setStep(ProcessingStep.IDLE); setFileName(null); setVideoBase64(null); }} className="text-slate-400 hover:text-slate-600 text-sm flex items-center py-2"><svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" /></svg>เริ่มใหม่</button>
+              <button onClick={handleStartOver} className="text-slate-400 hover:text-slate-600 text-sm flex items-center py-2"><svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" /></svg>เริ่มใหม่ทั้งหมด</button>
             </div>
 
             <div className="flex flex-col">
               <h4 className="font-bold text-slate-700 mb-4 flex justify-between items-center">
                 <span>แก้ไขคำแปล & เล่นเสียง</span>
-                {isRegenerating && <span className="text-xs text-blue-500 animate-pulse bg-blue-50 px-2 py-1 rounded-full">กำลังอัพเดทเสียง...</span>}
+                {isRegenerating && <span className="text-xs text-blue-500 animate-pulse bg-blue-50 px-2 py-1 rounded-full">กำลังอัพเดทเสียงพากย์...</span>}
               </h4>
               <textarea value={translatedText} onChange={(e) => setTranslatedText(e.target.value)} className="flex-1 w-full bg-slate-50 border border-slate-200 rounded-2xl p-5 text-slate-700 focus:ring-2 focus:ring-blue-100 focus:border-blue-400 outline-none resize-none mb-4 leading-relaxed text-lg" placeholder="พิมพ์คำแปลที่ต้องการแก้ไขที่นี่..." />
               
+              {errorMessage && (
+                <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-sm font-medium animate-in fade-in slide-in-from-top-2">
+                  <p className="font-bold mb-1 uppercase tracking-tight">⚠️ เกิดข้อผิดพลาด</p>
+                  <p>{errorMessage}</p>
+                </div>
+              )}
+
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <button 
@@ -521,7 +613,7 @@ const App: React.FC = () => {
                     ) : (
                       <svg className="w-5 h-5 mr-2 group-hover:animate-bounce" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M12.395 2.553a1 1 0 00-1.45-.385c-.345.23-.614.558-.822.88-.214.33-.403.713-.57 1.116-.334.804-.614 1.768-.84 2.734a31.365 31.365 0 00-.613 3.58 2.64 2.64 0 01-.945-1.067c-.328-.68-.398-1.534-.398-2.654A1 1 0 005.05 6.05 6.981 6.981 0 003 11a7 7 0 1011.95-4.95c-.592-.591-.98-1.516-1.555-3.497z" clipRule="evenodd" /></svg>
                     )}
-                    {isHooking ? 'สร้าง...' : 'AI Hook (TikTok)'}
+                    {isHooking ? 'กำลังปรุง...' : 'TikTok AI Hook'}
                   </button>
 
                   <button 
@@ -534,21 +626,21 @@ const App: React.FC = () => {
                     ) : (
                       <svg className="w-5 h-5 mr-2 group-hover:rotate-12 transition-transform" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-9h10v2H7z"/></svg>
                     )}
-                    {isIsanHooking ? 'กำลังแปล...' : 'Ai hook อิสาน สไตล์'}
+                    {isIsanHooking ? 'เบิ่งแน...' : 'Hook สไตล์อิสาน'}
                   </button>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
-                  <button onClick={() => refreshVoice(translatedText)} disabled={isRegenerating || isHooking || isIsanHooking} className="bg-slate-100 text-slate-700 py-4 rounded-2xl font-bold hover:bg-slate-200 transition-all disabled:opacity-50 flex flex-col items-center justify-center leading-tight">
-                    <span>เจ็นเสียงใหม่</span>
-                    <span className="text-[10px] font-normal opacity-60">(อัพเดทอารมณ์และคำ)</span>
+                  <button onClick={() => refreshVoice(translatedText)} disabled={isRegenerating || isHooking || isIsanHooking} className="bg-slate-100 text-slate-700 py-4 rounded-2xl font-bold hover:bg-slate-200 transition-all disabled:opacity-50 flex flex-col items-center justify-center leading-tight text-center">
+                    <span>เจ็นเสียงพากย์ใหม่</span>
+                    <span className="text-[10px] font-normal opacity-60">(หลังแก้คำแปล)</span>
                   </button>
                   <button 
-                    onClick={isPlaying ? stopTranslation : () => playTranslation()} 
+                    onClick={isPlaying ? stopTranslation : playTranslation} 
                     disabled={isRegenerating || isHooking || isIsanHooking || !currentAudioBuffer}
                     className={`${isPlaying ? 'bg-red-500' : 'bg-indigo-600'} text-white py-4 rounded-2xl font-bold hover:opacity-90 transition-all shadow-lg flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed`}
                   >
-                    {isPlaying ? (<><svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" /></svg>หยุดเล่น</>) : (<><svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>เล่นพร้อมพากย์</>)}
+                    {isPlaying ? (<><svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" /></svg>หยุดเล่น</>) : (<><svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>พรีวิวพากย์ไทย</>)}
                   </button>
                 </div>
               </div>
@@ -557,7 +649,7 @@ const App: React.FC = () => {
         )}
       </main>
       <footer className="mt-8 text-slate-400 text-xs text-center font-medium opacity-60 uppercase tracking-widest">
-        <p>Gemini AI • Multi-Modality Translation Engine</p>
+        <p>VocalBridge • AI Video Dubbing Engine</p>
       </footer>
     </div>
   );

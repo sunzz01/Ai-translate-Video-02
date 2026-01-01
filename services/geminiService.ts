@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GoogleGenAI, Modality, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { VoiceSettings } from "../types";
 
 const moodToEnglish = (mood: string) => {
@@ -13,25 +13,30 @@ const moodToEnglish = (mood: string) => {
   }
 };
 
-/**
- * ล้างข้อความเพื่อให้พร้อมสำหรับการพากย์เสียง 
- * (ลบ Markdown, ลบเครื่องหมายคำพูดส่วนเกิน และลบข้อความอธิบายที่ AI อาจแถมมา)
- */
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 const cleanTextForSpeech = (text: string): string => {
+  if (!text) return "";
   let cleaned = text
-    .replace(/[*_#`~]/g, '') // ลบ Markdown
-    .replace(/^["']|["']$/g, '') // ลบเครื่องหมายคำพูดที่หัว/ท้าย
-    .replace(/\[.*?\]/g, '') // ลบคำอธิบายในวงเล็บเหลี่ยมเช่น [Music], [Sound]
-    .replace(/\(.*?\)/g, '') // ลบคำอธิบายในวงเล็บกลม
+    .replace(/[*_#`~]/g, '')
+    .replace(/[\[\]\(\)]/g, ' ')
+    .replace(/["']/g, '')
+    .replace(/\s+/g, ' ')
     .trim();
-    
-  // จำกัดความยาวข้อความสำหรับ TTS เพื่อป้องกัน Error 500 (Internal Error) ในรุ่นทดลอง
+  
   if (cleaned.length > 800) {
     cleaned = cleaned.substring(0, 797) + "...";
   }
-  
   return cleaned;
 };
+
+// การตั้งค่าความปลอดภัยที่อนุญาตให้แสดงออกได้อย่างอิสระ
+const safetySettings = [
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+];
 
 export const translateVideoContent = async (
   videoBase64: string, 
@@ -42,36 +47,26 @@ export const translateVideoContent = async (
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const speedInstruction = settings.speed === 'sync' && duration 
-    ? `The video duration is ${duration.toFixed(1)} seconds. Ensure the translation is concise enough to be spoken naturally within this time limit.` 
-    : "Translate naturally without strict time constraints.";
+    ? `IMPORTANT: The video is ${duration.toFixed(1)}s long. Summarize and translate into Thai VERY SHORT and PUNCHY.` 
+    : "Translate into Thai naturally.";
 
   const dialectInstruction = settings.mood === 'isan' 
-    ? "Translate the spoken words into Isan dialect (Northeastern Thai). Use Isan vocabulary and particle words like 'เด้อ', 'น้อ', 'จ้า' naturally."
-    : "Translate spoken words into standard Thai.";
+    ? "Use Isan dialect."
+    : "Use standard Thai.";
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: {
       parts: [
-        {
-          inlineData: {
-            data: videoBase64,
-            mimeType: mimeType
-          }
-        },
-        {
-          text: `Analyze the audio/visual content. 
-          1. Detect the source language. 
-          2. ${dialectInstruction}
-          Tone/Style: ${moodToEnglish(settings.mood)}.
-          Target Gender of Speaker: ${settings.gender}.
-          Timing: ${speedInstruction}
-          Return ONLY the translated text for text-to-speech. Do not include any meta-talk like 'Here is the translation'.`
-        }
+        { inlineData: { data: videoBase64, mimeType: mimeType } },
+        { text: `Analyze video content. ${dialectInstruction} ${speedInstruction} Tone: ${moodToEnglish(settings.mood)}. 
+        IMPORTANT: You ARE ALLOWED to use strong language, street slang, and profanity (คำหยาบ/ภาษาพ่อขุน) if it fits the context or mood of the video to make it authentic and high-impact. 
+        Return ONLY the Thai translated text without any explanations.` }
       ]
     },
-    config: {
-      temperature: 0.7,
+    config: { 
+      temperature: 0.8,
+      safetySettings 
     }
   });
 
@@ -83,16 +78,19 @@ export const generateThaiHook = async (
   settings: VoiceSettings
 ): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  const dialectContext = settings.mood === 'isan' ? "in Isan dialect" : "in Thai";
+  const dialectContext = settings.mood === 'isan' ? "ภาษาอีสาน" : "ภาษาไทย";
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Rewrite this text ${dialectContext} to be a high-engagement social media hook (like for TikTok/Reels). 
-    The first 3 seconds must be extremely catchy and stop the scroll. 
-    Keep the core meaning but make it punchy, emotional, or intriguing.
-    Current Text: "${currentText}"
-    Return ONLY the improved text. Do not add any explanation or notes.`
+    contents: `สรุปและเรียบเรียงข้อความนี้ให้เป็น "คำโปรย (Hook)" สำหรับ TikTok ใน${dialectContext} 
+    เน้นความกระชับและดึงดูดใจสูงสุด 
+    หมายเหตุ: สามารถใช้คำหยาบ ภาษาปาก หรือแสลง (Street slang/Profanity) ได้อย่างเต็มที่เพื่อให้ได้อารมณ์และยอดวิว (Make it raw and real).
+    ข้อความต้นฉบับ: "${currentText}"
+    คำตอบ: (เฉพาะข้อความที่สรุปแล้วเท่านั้น)` ,
+    config: { 
+      temperature: 0.9,
+      safetySettings 
+    }
   });
 
   return cleanTextForSpeech(response.text || currentText);
@@ -102,14 +100,17 @@ export const generateIsanHook = async (
   currentText: string
 ): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Rewrite this text to be an extremely catchy social media hook (TikTok/Reels style) using PURE Isan (Northeastern Thai) dialect. 
-    Every word must be translated into Isan dialect (e.g., use 'เบิ่ง' instead of 'ดู', 'แซ่บ' instead of 'อร่อย', 'เด้อ' particles). 
-    Make it funny, spicy (zabb), and highly engaging.
-    Current Text: "${currentText}"
-    Return ONLY the improved PURE Isan text.`
+    contents: `สรุปและเรียบเรียงข้อความนี้ให้เป็น "คำโปรย (Hook)" สไตล์ภาษาอีสานที่ม่วนๆ จ๊วดๆ สำหรับ TikTok 
+    เน้นความสั้นและกระชับ 
+    หมายเหตุ: สามารถใช้คำหยาบอีสาน ภาษาปาก หรือคำแสลงบ้านๆ ได้เต็มที่เพื่อให้ดูเรียลและสะใจ (Be authentic, use strong Isan words if needed).
+    ข้อความต้นฉบับ: "${currentText}"
+    คำตอบ: (เฉพาะข้อความภาษาอีสานเท่านั้น)` ,
+    config: { 
+      temperature: 0.9,
+      safetySettings 
+    }
   });
 
   return cleanTextForSpeech(response.text || currentText);
@@ -122,72 +123,55 @@ export const generateThaiSpeech = async (
   retryAttempt: number = 0
 ): Promise<Uint8Array> => {
   const cleanedText = cleanTextForSpeech(text);
-  
-  if (!cleanedText) {
-    throw new Error('Text for speech is empty after cleaning');
+  if (!cleanedText) throw new Error('ไม่พบข้อความสำหรับพากย์เสียง');
+
+  if (retryAttempt > 0) {
+    await delay(Math.pow(2, retryAttempt) * 1000);
   }
 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const moodDesc = moodToEnglish(settings.mood);
+  const mood = moodToEnglish(settings.mood);
   const voiceName = settings.gender === 'male' ? 'Puck' : 'Kore';
-  const speedDesc = settings.speed === 'sync' ? "moderately fast" : "natural";
+
+  const rateInstruction = (settings.speed === 'sync' && duration)
+    ? `Duration target: ${duration.toFixed(1)}s`
+    : "Natural speed";
+
+  const simplePrompt = `Speak this text: "${cleanedText}". Tone: ${mood}. ${rateInstruction}. 
+  Speak clearly even if there are strong words or slang. Do not censor any words.`;
 
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
-      // ใช้ Prompt ที่เรียบง่ายที่สุดเพื่อเลี่ยง Error 500
-      contents: [{ 
-        parts: [{ 
-          text: `Speak ${moodDesc} at a ${speedDesc} pace: ${cleanedText}` 
-        }] 
-      }],
+      contents: [{ parts: [{ text: simplePrompt }] }],
       config: {
-        // นำ systemInstruction ออกเพื่อความเสถียรของรุ่น Preview
         responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: { voiceName: voiceName },
           },
         },
+        safetySettings
       },
     });
 
     const candidate = response.candidates?.[0];
-    
     if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
-      const reason = candidate.finishReason;
-      if (retryAttempt === 0) {
-        console.warn(`TTS error ${reason}, retrying with simplified mood...`);
-        return generateThaiSpeech(cleanedText, { ...settings, mood: 'natural', speed: 'normal' }, undefined, 1);
-      }
-      throw new Error(`TTS failed with reason: ${reason}. Please try simplifying the text or using a shorter version.`);
+      if (retryAttempt < 2) return generateThaiSpeech(cleanedText, settings, duration, retryAttempt + 1);
+      throw new Error(`การสร้างเสียงถูกระงับ (${candidate.finishReason})`);
     }
 
-    let base64Audio: string | undefined;
-    if (candidate?.content?.parts) {
-      for (const part of candidate.content.parts) {
-        if (part.inlineData?.data) {
-          base64Audio = part.inlineData.data;
-          break;
-        }
-      }
-    }
+    const audioPart = candidate?.content?.parts?.find(p => p.inlineData?.data);
+    const base64Audio = audioPart?.inlineData?.data;
 
-    if (!base64Audio) {
-      throw new Error('Failed to generate audio data from Gemini.');
-    }
+    if (!base64Audio) throw new Error('API ไม่ส่งข้อมูลเสียง');
 
     return decodeBase64(base64Audio);
   } catch (error: any) {
-    console.error('Gemini TTS Error:', error);
-    
-    // หากเกิด Error 500 หรืออื่นๆ ให้ลองใหม่ 1 ครั้งด้วยค่าที่เซฟที่สุด
-    if (retryAttempt === 0) {
-       console.log('Internal error encountered, attempting fallback...');
-       return generateThaiSpeech(cleanedText, { ...settings, mood: 'natural', speed: 'normal' }, undefined, 1);
+    if ((error?.message?.includes('429') || error?.message?.includes('quota')) && retryAttempt < 2) {
+      return generateThaiSpeech(cleanedText, settings, duration, retryAttempt + 1);
     }
-    
-    throw new Error(error.message || 'Gemini TTS Service is temporarily unavailable (Internal Error 500). Please try again or use shorter text.');
+    throw error;
   }
 };
 
@@ -207,12 +191,7 @@ export async function decodePCMData(
   sampleRate: number = 24000,
   numChannels: number = 1
 ): Promise<AudioBuffer> {
-  const dataInt16 = new Int16Array(
-    data.buffer, 
-    data.byteOffset, 
-    Math.floor(data.byteLength / 2)
-  );
-  
+  const dataInt16 = new Int16Array(data.buffer, data.byteOffset, data.byteLength / 2);
   const frameCount = dataInt16.length / numChannels;
   const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
 
