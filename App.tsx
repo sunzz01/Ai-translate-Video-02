@@ -90,8 +90,8 @@ const App: React.FC = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 20 * 1024 * 1024) {
-      setErrorMessage("ไฟล์มีขนาดใหญ่เกินไป (จำกัด 20MB)");
+    if (file.size > 50 * 1024 * 1024) {
+      setErrorMessage("ไฟล์มีขนาดใหญ่เกินไป (จำกัด 50MB)");
       return;
     }
 
@@ -128,9 +128,9 @@ const App: React.FC = () => {
       // ใช้ Cobalt API (Public Instance) เป็นตัวช่วยดาวน์โหลด
       // รายการ instance: https://instances.cobalt.tools/
       const apiInstances = [
-        "https://api.cobalt.tools/api/json",
-        "https://cobalt.perreault.info/api/json",
-        "https://co.wuk.sh/api/json"
+        "https://downloadapi.stuff.solutions",
+        "https://cobalt-api.kwiatekmiki.com",
+        "https://cobalt-7.kwiatekmiki.com"
       ];
 
       let success = false;
@@ -138,40 +138,53 @@ const App: React.FC = () => {
       let videoMime = "video/mp4";
 
       for (const api of apiInstances) {
-        try {
-          const response = await fetch(api, {
-            method: 'POST',
-            headers: {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              url: videoUrlInput,
-              videoQuality: '720', // ลดขนาดไฟล์เพื่อความรวดเร็ว
-              downloadMode: 'video'
-            })
-          });
+        // ลองทั้ง root (v10) และ /api/json (v9)
+        const endpoints = [api, `${api}/api/json`].filter(Boolean);
 
-          const data = await response.json();
-          if (data.url) {
-            const videoResp = await fetch(data.url);
-            videoBuffer = await videoResp.arrayBuffer();
-            videoMime = videoResp.headers.get('Content-Type') || "video/mp4";
-            success = true;
-            break;
+        for (const endpoint of endpoints) {
+          try {
+            console.log(`Checking Cobalt instance: ${endpoint}`);
+            const response = await fetch(endpoint, {
+              method: 'POST',
+              headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                url: videoUrlInput,
+                videoQuality: '720',
+                vCodec: 'h264'
+              })
+            });
+
+            if (!response.ok) {
+              const errBody = await response.text();
+              console.warn(`Instance ${endpoint} returned ${response.status}: ${errBody}`);
+              continue;
+            }
+
+            const data = await response.json();
+            if (data.url) {
+              const videoResp = await fetch(data.url);
+              videoBuffer = await videoResp.arrayBuffer();
+              videoMime = videoResp.headers.get('Content-Type') || "video/mp4";
+              success = true;
+              break;
+            }
+          } catch (e) {
+            console.warn(`Error connecting to ${endpoint}:`, e);
           }
-        } catch (e) {
-          console.warn(`Failed with instance ${api}, trying next...`);
         }
+        if (success) break;
       }
 
       if (!success || !videoBuffer) {
         throw new Error("ไม่สามารถดาวน์โหลดวิดีโอจากลิงก์นี้ได้ กรุณาลองลิงก์อื่นหรือใช้การอัปโหลดไฟล์แทน");
       }
 
-      // ตรวจสอบขนาดไฟล์ (Gemini จำกัดที่ 20MB ในที่นี้เราเตือนไว้ก่อน)
-      if (videoBuffer.byteLength > 20 * 1024 * 1024) {
-        throw new Error("วิดีโอจากลิงก์มีขนาดใหญ่เกินไป (จำกัด 20MB)");
+      // ตรวจสอบขนาดไฟล์ (Gemini จำกัดที่ 50MB ในที่นี้เราเตือนไว้ก่อน)
+      if (videoBuffer.byteLength > 50 * 1024 * 1024) {
+        throw new Error("วิดีโอจากลิงก์มีขนาดใหญ่เกินไป (จำกัด 50MB)");
       }
 
       const blob = new Blob([videoBuffer], { type: videoMime });
@@ -597,7 +610,7 @@ const App: React.FC = () => {
                       )}
                     </button>
                   </div>
-                  <p className="mt-2 text-[10px] text-slate-400 font-medium">รองรับวิดีโอสั้นและปกติ (ขนาดไฟล์ไม่เกิน 20MB หลังดาวน์โหลด)</p>
+                  <p className="mt-2 text-[10px] text-slate-400 font-medium">รองรับวิดีโอสั้นและปกติ (ขนาดไฟล์ไม่เกิน 50MB หลังดาวน์โหลด)</p>
                 </div>
 
                 <div className="flex items-center gap-4 py-2">
@@ -622,7 +635,7 @@ const App: React.FC = () => {
                       <p className="text-green-600/60 text-[10px] font-bold">ความยาว: {videoDuration.toFixed(1)} วินาที</p>
                     </div>
                   ) : (
-                    <p className="text-slate-400 text-[11px] font-medium italic">รองรับไฟล์วิดีโอทั่วไป (สูงสุด 20MB)</p>
+                    <p className="text-slate-400 text-[11px] font-medium italic">รองรับไฟล์วิดีโอทั่วไป (สูงสุด 50MB)</p>
                   )}
                 </div>
               </div>
