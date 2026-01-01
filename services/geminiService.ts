@@ -8,6 +8,7 @@ const moodToEnglish = (mood: string) => {
     case 'excited': return 'excitedly';
     case 'soft': return 'softly and gently';
     case 'serious': return 'seriously and formally';
+    case 'isan': return 'with a friendly Isan (Northeastern Thai) dialect and accent';
     default: return 'naturally';
   }
 };
@@ -21,8 +22,12 @@ export const translateVideoContent = async (
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const speedInstruction = settings.speed === 'sync' && duration 
-    ? `The video duration is ${duration.toFixed(1)} seconds. Ensure the Thai translation is concise enough to be spoken naturally within this time limit.` 
+    ? `The video duration is ${duration.toFixed(1)} seconds. Ensure the translation is concise enough to be spoken naturally within this time limit.` 
     : "Translate naturally without strict time constraints.";
+
+  const dialectInstruction = settings.mood === 'isan' 
+    ? "Translate the spoken words into Isan dialect (Northeastern Thai). Use Isan vocabulary and particle words like 'เด้อ', 'น้อ', 'จ้า' naturally."
+    : "Translate spoken words into standard Thai.";
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
@@ -37,11 +42,11 @@ export const translateVideoContent = async (
         {
           text: `Analyze the audio/visual content. 
           1. Detect the source language. 
-          2. Translate spoken words into Thai.
-          Tone/Style: ${settings.mood === 'natural' ? 'Natural' : moodToEnglish(settings.mood)}.
+          2. ${dialectInstruction}
+          Tone/Style: ${moodToEnglish(settings.mood)}.
           Target Gender of Speaker: ${settings.gender}.
           Timing: ${speedInstruction}
-          Return ONLY the Thai translation text for text-to-speech.`
+          Return ONLY the translated text for text-to-speech.`
         }
       ]
     },
@@ -59,13 +64,32 @@ export const generateThaiHook = async (
 ): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
+  const dialectContext = settings.mood === 'isan' ? "in Isan dialect" : "in Thai";
+
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Rewrite this Thai text to be a high-engagement social media hook (like for TikTok/Reels). 
+    contents: `Rewrite this text ${dialectContext} to be a high-engagement social media hook (like for TikTok/Reels). 
     The first 3 seconds must be extremely catchy and stop the scroll. 
     Keep the core meaning but make it punchy, emotional, or intriguing.
     Current Text: "${currentText}"
-    Return ONLY the improved Thai text.`
+    Return ONLY the improved text.`
+  });
+
+  return response.text || currentText;
+};
+
+export const generateIsanHook = async (
+  currentText: string
+): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Rewrite this text to be an extremely catchy social media hook (TikTok/Reels style) using PURE Isan (Northeastern Thai) dialect. 
+    Every word must be translated into Isan dialect (e.g., use 'เบิ่ง' instead of 'ดู', 'แซ่บ' instead of 'อร่อย', 'เด้อ' particles). 
+    Make it funny, spicy (zabb), and highly engaging.
+    Current Text: "${currentText}"
+    Return ONLY the improved PURE Isan text.`
   });
 
   return response.text || currentText;
@@ -86,7 +110,7 @@ export const generateThaiSpeech = async (
 
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-preview-tts",
-    contents: [{ parts: [{ text: `Instruction: ${timingPrompt} Say ${moodPrompt} in Thai: ${text}` }] }],
+    contents: [{ parts: [{ text: `Instruction: ${timingPrompt} Speak ${moodPrompt}. Text: ${text}` }] }],
     config: {
       responseModalities: [Modality.AUDIO],
       speechConfig: {

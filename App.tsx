@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { ProcessingStep, VoiceSettings, SettingsMode, Gender, Mood, SpeechSpeed } from './types';
-import { translateVideoContent, generateThaiSpeech, decodePCMData, generateThaiHook } from './services/geminiService';
+import { translateVideoContent, generateThaiSpeech, decodePCMData, generateThaiHook, generateIsanHook } from './services/geminiService';
 
 const App: React.FC = () => {
   const [step, setStep] = useState<ProcessingStep>(ProcessingStep.IDLE);
@@ -16,6 +16,7 @@ const App: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isHooking, setIsHooking] = useState(false);
+  const [isIsanHooking, setIsIsanHooking] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   
   const [settings, setSettings] = useState<VoiceSettings>({
@@ -71,7 +72,6 @@ const App: React.FC = () => {
       const objUrl = URL.createObjectURL(file);
       setVideoUrl(objUrl);
 
-      // Get Duration
       const tempVideo = document.createElement('video');
       tempVideo.src = objUrl;
       tempVideo.onloadedmetadata = () => {
@@ -82,12 +82,16 @@ const App: React.FC = () => {
   };
 
   const handleCancel = () => {
-    setStep(ProcessingStep.IDLE);
-    setErrorMessage(null);
-    setProgress(0);
     if (processingAbortController.current) {
       processingAbortController.current.abort();
     }
+    setStep(ProcessingStep.IDLE);
+    setErrorMessage(null);
+    setProgress(0);
+    setIsHooking(false);
+    setIsIsanHooking(false);
+    setIsRegenerating(false);
+    (window as any).currentAudioBuffer = null;
   };
 
   const startProcessing = async () => {
@@ -96,19 +100,22 @@ const App: React.FC = () => {
       return;
     }
 
-    processingAbortController.current = new AbortController();
+    const controller = new AbortController();
+    processingAbortController.current = controller;
 
     try {
       setStep(ProcessingStep.ANALYZING);
       const text = await translateVideoContent(videoBase64, videoMimeType, settings, videoDuration);
+      if (controller.signal.aborted) return;
       setTranslatedText(text);
       
       setStep(ProcessingStep.GENERATING_VOICE);
-      await refreshVoice(text, videoDuration);
+      await refreshVoice(text, videoDuration, undefined, controller);
+      if (controller.signal.aborted) return;
       
       setStep(ProcessingStep.COMPLETED);
     } catch (error: any) {
-      if (error.name === 'AbortError') return;
+      if (error.name === 'AbortError' || controller.signal.aborted) return;
       setErrorMessage(error.message || "เกิดข้อผิดพลาด");
       setStep(ProcessingStep.ERROR);
     }
@@ -117,24 +124,59 @@ const App: React.FC = () => {
   const applyAIHook = async () => {
     if (!translatedText || isHooking) return;
     setIsHooking(true);
+    // ล้างเสียงเก่าทิ้งทันที
+    (window as any).currentAudioBuffer = null;
+    
+    const controller = new AbortController();
+    processingAbortController.current = controller;
+
     try {
       const hookedText = await generateThaiHook(translatedText, settings);
+      if (controller.signal.aborted) return;
       setTranslatedText(hookedText);
-      // Auto refresh voice after hook application
-      await refreshVoice(hookedText);
-    } catch (e) {
-      console.error(e);
-      setErrorMessage("ไม่สามารถสร้าง Hook ได้");
+      await refreshVoice(hookedText, undefined, undefined, controller);
+    } catch (e: any) {
+      if (e.name !== 'AbortError') setErrorMessage("ไม่สามารถสร้าง Hook ได้");
     } finally {
       setIsHooking(false);
     }
   };
 
-  const refreshVoice = async (textToUse: string, customDuration?: number) => {
-    setIsRegenerating(true);
-    const durationToUse = customDuration !== undefined ? customDuration : videoDuration;
+  const applyIsanHook = async () => {
+    if (!translatedText || isIsanHooking) return;
+    setIsIsanHooking(true);
+    // ล้างเสียงเก่าทิ้งทันที
+    (window as any).currentAudioBuffer = null;
+    
+    const isanSettings: VoiceSettings = { ...settings, mood: 'isan' };
+    setSettings(isanSettings);
+
+    const controller = new AbortController();
+    processingAbortController.current = controller;
+
     try {
-      const pcmData = await generateThaiSpeech(textToUse, settings, durationToUse);
+      const hookedText = await generateIsanHook(translatedText);
+      if (controller.signal.aborted) return;
+      setTranslatedText(hookedText);
+      await refreshVoice(hookedText, undefined, isanSettings, controller);
+    } catch (e: any) {
+      if (e.name !== 'AbortError') setErrorMessage("ไม่สามารถสร้าง Hook อิสานได้");
+    } finally {
+      setIsIsanHooking(false);
+    }
+  };
+
+  const refreshVoice = async (textToUse: string, customDuration?: number, overrideSettings?: VoiceSettings, controller?: AbortController) => {
+    setIsRegenerating(true);
+    // ล้างเสียงเก่าทิ้งก่อนเริ่มเจ็นใหม่
+    (window as any).currentAudioBuffer = null;
+    
+    const durationToUse = customDuration !== undefined ? customDuration : videoDuration;
+    const settingsToUse = overrideSettings || settings;
+
+    try {
+      const pcmData = await generateThaiSpeech(textToUse, settingsToUse, durationToUse);
+      if (controller?.signal.aborted) return;
       
       if (!audioContextRef.current) {
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -144,6 +186,7 @@ const App: React.FC = () => {
       (window as any).currentAudioBuffer = audioBuffer;
     } catch (e) {
       console.error(e);
+      if (controller?.signal.aborted) return;
       setErrorMessage("ไม่สามารถสร้างเสียงใหม่ได้");
     } finally {
       setIsRegenerating(false);
@@ -285,7 +328,7 @@ const App: React.FC = () => {
   };
 
   const moodLabels: Record<Mood, string> = {
-    natural: 'ปกติ', cheerful: 'ร่าเริง', excited: 'ตื่นเต้น', soft: 'นุ่มนวล', serious: 'จริงจัง'
+    natural: 'ปกติ', cheerful: 'ร่าเริง', excited: 'ตื่นเต้น', soft: 'นุ่มนวล', serious: 'จริงจัง', isan: 'อิสาน'
   };
 
   return (
@@ -337,8 +380,8 @@ const App: React.FC = () => {
                 </div>
                 {settings.mode === 'manual' && (
                   <div className="md:col-span-2 lg:col-span-3">
-                    <label className="text-sm font-semibold text-slate-500 block mb-2">อารมณ์การพูด (Mood)</label>
-                    <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
+                    <label className="text-sm font-semibold text-slate-500 block mb-2">อารมณ์/สำเนียง (Mood/Dialect)</label>
+                    <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
                       {(Object.keys(moodLabels) as Mood[]).map((m) => (
                         <button key={m} onClick={() => updateSettings('mood', m)} className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all ${settings.mood === m ? 'bg-green-100 border-green-300 text-green-700' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'}`}>{moodLabels[m]}</button>
                       ))}
@@ -368,7 +411,6 @@ const App: React.FC = () => {
               {errorMessage && <p className="mt-4 text-red-500 text-sm font-medium">{errorMessage}</p>}
             </div>
 
-            {/* Run Button Section */}
             {videoBase64 && (
               <div className="mt-10 flex justify-center">
                 <button 
@@ -433,10 +475,10 @@ const App: React.FC = () => {
                     </div>
                   </div>
                   <div className="col-span-2">
-                    <label className="text-[10px] font-bold text-slate-400 mb-1 block">อารมณ์</label>
-                    <div className="flex bg-white p-1 rounded-lg border border-slate-200 overflow-x-auto">
+                    <label className="text-[10px] font-bold text-slate-400 mb-1 block">อารมณ์/สำเนียง</label>
+                    <div className="flex bg-white p-1 rounded-lg border border-slate-200 overflow-x-auto scrollbar-hide">
                       {(Object.keys(moodLabels) as Mood[]).map((m) => (
-                        <button key={m} onClick={() => updateSettings('mood', m)} className={`px-2 py-1 text-[10px] whitespace-nowrap rounded ${settings.mood === m ? 'bg-green-500 text-white' : 'text-slate-500 hover:bg-slate-50'}`}>{moodLabels[m]}</button>
+                        <button key={m} onClick={() => updateSettings('mood', m)} className={`px-3 py-1 text-[10px] whitespace-nowrap rounded ${settings.mood === m ? 'bg-green-500 text-white' : 'text-slate-500 hover:bg-slate-50'}`}>{moodLabels[m]}</button>
                       ))}
                     </div>
                   </div>
@@ -469,25 +511,44 @@ const App: React.FC = () => {
               <textarea value={translatedText} onChange={(e) => setTranslatedText(e.target.value)} className="flex-1 w-full bg-slate-50 border border-slate-200 rounded-2xl p-5 text-slate-700 focus:ring-2 focus:ring-blue-100 focus:border-blue-400 outline-none resize-none mb-4 leading-relaxed text-lg" placeholder="พิมพ์คำแปลที่ต้องการแก้ไขที่นี่..." />
               
               <div className="space-y-4">
-                <button 
-                  onClick={applyAIHook} 
-                  disabled={isHooking || isRegenerating}
-                  className="w-full bg-gradient-to-r from-orange-500 to-red-600 text-white py-4 rounded-2xl font-black text-lg hover:shadow-xl hover:shadow-orange-200 hover:scale-[1.02] transition-all flex items-center justify-center group disabled:opacity-50"
-                >
-                  {isHooking ? (
-                    <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
-                  ) : (
-                    <svg className="w-6 h-6 mr-2 group-hover:animate-bounce" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M12.395 2.553a1 1 0 00-1.45-.385c-.345.23-.614.558-.822.88-.214.33-.403.713-.57 1.116-.334.804-.614 1.768-.84 2.734a31.365 31.365 0 00-.613 3.58 2.64 2.64 0 01-.945-1.067c-.328-.68-.398-1.534-.398-2.654A1 1 0 005.05 6.05 6.981 6.981 0 003 11a7 7 0 1011.95-4.95c-.592-.591-.98-1.516-1.555-3.497z" clipRule="evenodd" /></svg>
-                  )}
-                  {isHooking ? 'กำลังสร้างประโยค Hook...' : 'AI Hook Generator (3s TikTok Style)'}
-                </button>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <button 
+                    onClick={applyAIHook} 
+                    disabled={isHooking || isIsanHooking || isRegenerating}
+                    className="flex-1 bg-gradient-to-r from-orange-500 to-red-600 text-white py-4 px-2 rounded-2xl font-black text-sm hover:shadow-xl hover:shadow-orange-200 hover:scale-[1.02] transition-all flex items-center justify-center group disabled:opacity-50"
+                  >
+                    {isHooking ? (
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                    ) : (
+                      <svg className="w-5 h-5 mr-2 group-hover:animate-bounce" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M12.395 2.553a1 1 0 00-1.45-.385c-.345.23-.614.558-.822.88-.214.33-.403.713-.57 1.116-.334.804-.614 1.768-.84 2.734a31.365 31.365 0 00-.613 3.58 2.64 2.64 0 01-.945-1.067c-.328-.68-.398-1.534-.398-2.654A1 1 0 005.05 6.05 6.981 6.981 0 003 11a7 7 0 1011.95-4.95c-.592-.591-.98-1.516-1.555-3.497z" clipRule="evenodd" /></svg>
+                    )}
+                    {isHooking ? 'สร้าง...' : 'AI Hook (TikTok)'}
+                  </button>
+
+                  <button 
+                    onClick={applyIsanHook} 
+                    disabled={isIsanHooking || isHooking || isRegenerating}
+                    className="flex-1 bg-gradient-to-r from-yellow-500 to-amber-700 text-white py-4 px-2 rounded-2xl font-black text-sm hover:shadow-xl hover:shadow-yellow-200 hover:scale-[1.02] transition-all flex items-center justify-center group disabled:opacity-50"
+                  >
+                    {isIsanHooking ? (
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                    ) : (
+                      <svg className="w-5 h-5 mr-2 group-hover:rotate-12 transition-transform" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-9h10v2H7z"/></svg>
+                    )}
+                    {isIsanHooking ? 'กำลังแปล...' : 'Ai hook อิสาน สไตล์'}
+                  </button>
+                </div>
 
                 <div className="grid grid-cols-2 gap-4">
-                  <button onClick={() => refreshVoice(translatedText)} disabled={isRegenerating || isHooking} className="bg-slate-100 text-slate-700 py-4 rounded-2xl font-bold hover:bg-slate-200 transition-all disabled:opacity-50 flex flex-col items-center justify-center leading-tight">
+                  <button onClick={() => refreshVoice(translatedText)} disabled={isRegenerating || isHooking || isIsanHooking} className="bg-slate-100 text-slate-700 py-4 rounded-2xl font-bold hover:bg-slate-200 transition-all disabled:opacity-50 flex flex-col items-center justify-center leading-tight">
                     <span>เจ็นเสียงใหม่</span>
                     <span className="text-[10px] font-normal opacity-60">(อัพเดทอารมณ์และคำ)</span>
                   </button>
-                  <button onClick={isPlaying ? stopTranslation : () => playTranslation()} className={`${isPlaying ? 'bg-red-500' : 'bg-indigo-600'} text-white py-4 rounded-2xl font-bold hover:opacity-90 transition-all shadow-lg flex items-center justify-center`}>
+                  <button 
+                    onClick={isPlaying ? stopTranslation : () => playTranslation()} 
+                    disabled={isRegenerating || isHooking || isIsanHooking || !(window as any).currentAudioBuffer}
+                    className={`${isPlaying ? 'bg-red-500' : 'bg-indigo-600'} text-white py-4 rounded-2xl font-bold hover:opacity-90 transition-all shadow-lg flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed`}
+                  >
                     {isPlaying ? (<><svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" /></svg>หยุดเล่น</>) : (<><svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>เล่นพร้อมพากย์</>)}
                   </button>
                 </div>

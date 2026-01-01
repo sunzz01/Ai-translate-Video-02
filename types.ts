@@ -11,7 +11,7 @@ export enum ProcessingStep {
 
 export type SettingsMode = 'auto' | 'manual';
 export type Gender = 'male' | 'female';
-export type Mood = 'natural' | 'cheerful' | 'excited' | 'soft' | 'serious';
+export type Mood = 'natural' | 'cheerful' | 'excited' | 'soft' | 'serious' | 'isan';
 export type SpeechSpeed = 'normal' | 'sync';
 
 export interface VoiceSettings {
