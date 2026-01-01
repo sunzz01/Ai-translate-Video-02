@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ProcessingStep, VoiceSettings, SettingsMode, Gender, Mood, SpeechSpeed } from './types';
+import { ProcessingStep, VoiceSettings, SettingsMode, Gender, Mood, SpeechSpeed, LanguageIntensity } from './types';
 import { translateVideoContent, generateThaiSpeech, decodePCMData, generateThaiHook, generateIsanHook } from './services/geminiService';
 
 const App: React.FC = () => {
@@ -27,7 +27,9 @@ const App: React.FC = () => {
     gender: 'female',
     mood: 'natural',
     speed: 'normal',
-    intensity: 'normal'
+    intensity: 'normal',
+    customDuration: null,
+    speechRate: 1.0
   });
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -644,6 +646,30 @@ const App: React.FC = () => {
                       className="flex-1 bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-700 focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 outline-none transition-all"
                     />
                     <div className="flex items-center text-slate-400 text-xs font-bold px-2">วินาที</div>
+                  </div>
+                </div>
+
+                <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                  <div className="flex items-center justify-between mb-3">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Speaking Rate</label>
+                    <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full">{(settings.speechRate || 1.0).toFixed(1)}x</span>
+                  </div>
+                  <div className="flex items-center gap-4 group">
+                    <span className="text-xl grayscale group-hover:grayscale-0 transition-all opacity-60 group-hover:opacity-100">🐢</span>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="2.0"
+                      step="0.1"
+                      value={settings.speechRate || 1.0}
+                      onChange={(e) => updateSettings('speechRate', parseFloat(e.target.value))}
+                      className="flex-1 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600 hover:bg-slate-300 transition-colors"
+                    />
+                    <span className="text-xl grayscale group-hover:grayscale-0 transition-all opacity-60 group-hover:opacity-100">🐇</span>
+                  </div>
+                  <div className="flex justify-between mt-2 px-1">
+                    <span className="text-[9px] font-bold text-slate-300 uppercase">Slower</span>
+                    <span className="text-[9px] font-bold text-slate-300 uppercase">Faster</span>
                   </div>
                 </div>
 

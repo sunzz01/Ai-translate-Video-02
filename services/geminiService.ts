@@ -179,8 +179,8 @@ export const generateThaiSpeech = async (
   const voiceName = settings.gender === 'male' ? 'Puck' : 'Kore';
 
   const rateInstruction = (settings.speed === 'sync' && duration)
-    ? `Duration target: ${duration.toFixed(1)}s`
-    : "Natural speed";
+    ? `Duration target: ${duration.toFixed(1)}s. Adjust speaking speed to match this time.`
+    : `Speaking rate: ${settings.speechRate || 1.0}x (1.0 is normal, 0.5 is slow, 2.0 is fast)`;
 
   const intensityInstruction = settings.intensity === 'polite'
     ? "Speak politely and clearly. No rough words."
